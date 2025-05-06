@@ -26,6 +26,8 @@ The observed volatility can then be used as the input time series to fit the neu
 
 The Figure below provides a general representation of a neural network with one hidden layer. The network forecasts volatility at time $t+1,$ $V_{t+1},$ using lag values of observed volatility ($V_{t}, V_{t-1}, \ldots , V_{t-p}$).
 
+<img src="Images/NeuroVolatilityModel.png" alt="Neuro Volatility Model" width="500"/>
+
 
 
 
