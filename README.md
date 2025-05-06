@@ -28,6 +28,29 @@ The Figure below provides a general representation of a neural network with one 
 
 <img src="Images/NeuroVolatilityModel.png" alt="Neuro Volatility Model" width="500"/>
 
+#### Neuro Model Risk
+
+The model risk of risk models has been introduced by Danielson et. al. in 2016. Suppose we want to forecast risk for the day $t + 1$ based on the information available on day $t.$ Considering we have $N$ candidate models to forecast risk on day $t + 1,$ each providing different forecasts. Then the model risk is defined as the ratio of the highest to the lowest risk forecasts.
+```math
+\text{Model risk}=\text{Risk Ratio}_{t+1}=\dfrac{\text{max}\{\text{Risk}^{n}_{t+1}\}^{N}_{n=1}}{\text{min}\{\text{Risk}^{n}_{t+1}\}^{N}_{n=1}}.
+```
+where $N$ indicates the number of different risk measures calculated using forecasts. A model risk ratio close to one indicates that the financial system is stable.
+
+#### Time Series Cross-Validation
+
+It is important to note that traditional cross-validation techniques such as $K$-Fold and Leave-One-Out can not be used for time series data, as we are required to protect the correlation structure of the time series data and bring its information to the model. One way to implement cross-validation is by averaging over the test sets. It is commonly known as time-series cross-validation/evaluation on a rolling forecasting origin. In this approach, first, obtain a one-step-ahead forecast using the first few observations (training data). Second, again one-step-ahead forecast is obtained by adding one more observation to the training data. We continuously do this until the second last observation is added to the training data. Here, the training data set gradually grows. This approach can be modified to allow multi-step ahead forecasts, and the performance of a given model can be compared in terms of one-step ahead forecasts or multi-step ahead forecasts. This approach is much better than the single split because, in the single split, we only have one observation for each of the forecast horizons, and here, we have multiple observations.
+
+<img src="Images/TimeSeriesCrossValidation.png" alt="Time Series Cross-Validation" width="500"/>
+
+### Findings
+
+The existing model risk ratio forecast is based on linear volatility models, whereas the proposed neuro model risk forecasts allow more appropriate nonlinear, nonstationary neuro volatility forecasting models. Extensive experimental studies on price forecasts, volatility forecasts, and temperature forecasts show that the neuro model risk ratio forecast can effectively be used as a metric to assess the resilience and stability of a given financial system.
+
+### References
+
+1. R. J. Hyndman and G. Athanasopoulos, Forecasting: principles and practice, 3rd edition, OTexts: Melbourne, Australia. OTexts.com/fpp3, 2021.
+2. Thavaneswaran, A., Paseka, A., \& Frank, J. (2020). Generalized value at risk forecasting. Communications in Statistics-Theory and Methods, 49(20), 4988-4995.
+3. Danielsson, J., James, K. R., Valenzuela, M., \& Zer, I. (2016). Model risk of risk models. Journal of Financial Stability, 23, 79-91.
 
 
 
