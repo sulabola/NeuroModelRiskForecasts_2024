@@ -1,0 +1,290 @@
+---
+title: 'Rcode: COMPSAC 2024'
+author: "Sulalitha Bowala"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+rm(list=ls(all=TRUE)) # Remove objects from environment
+set.seed(12)
+```
+
+
+
+```{r, message=FALSE}
+### Call packages
+require("tseries") # load the tseries library
+require("zoo")
+require("moments")
+require("car")
+require("MASS")
+require("stats")  
+require("VGAM")
+require("fGarch")
+require("quantmod") # To download data alternatively
+require("PerformanceAnalytics") # To draw Timeseries graphs
+require("scales")
+require("PEIP")
+require("dplyr")
+require("lubridate")
+require("tidyverse")
+require("gridExtra")
+require("gdata")
+require("xtable")
+require("vioplot")
+require("fpp3")
+require("readr")
+require("tis")
+require("tibble")
+require("tsibble")
+require("stringr")
+require("magrittr")
+require("fable")
+require("Metrics") # rmse()
+require("forecast")
+```
+
+
+
+```{r}
+## Import data
+## Ontario data
+
+Ontario_demand_hourly <- read.csv("Data_2018_2019.csv")
+```
+
+
+```{r}
+### Manipulate hourly data to obtain daily data
+### + create a new categorical variable (day-type)
+
+Ontario_demand_hourly$Time <- as.POSIXct(Ontario_demand_hourly$Time, "%Y-%m-%d %H:%M:%S")
+Ontario_demand_hourly$Temperature <- Ontario_demand_hourly$Temperature
+Ontario_demand_hourly$Precipitation <- Ontario_demand_hourly$Precipitation
+Ontario_demand_hourly$CloudCover <- Ontario_demand_hourly$CloudCover
+Ontario_demand_hourly$IrradianceSurface <- Ontario_demand_hourly$IrradianceSurface
+Ontario_demand_hourly$IrradianceToa <- Ontario_demand_hourly$IrradianceToa
+Ontario_demand_hourly$Snowfall <- Ontario_demand_hourly$Snowfall
+Ontario_demand_hourly$SnowMass <- Ontario_demand_hourly$SnowMass
+Ontario_demand_hourly$Location <- Ontario_demand_hourly$Location
+Ontario_demand_hourly <- as_tsibble(Ontario_demand_hourly,index = 'Time',key = 'Location')
+
+Ontario_demand_hourly <- Ontario_demand_hourly %>% 
+  mutate(
+    Date = date( Time)
+  )
+Ontario_demand_hourly <- Ontario_demand_hourly %>% 
+  mutate(
+    Holiday = isHoliday(Ontario_demand_hourly$Date)
+  )
+Ontario_demand_hourly <- Ontario_demand_hourly %>%
+ mutate(Day_Type = case_when(
+    Holiday ~ "Holiday",
+    wday(Date) %in% 2:6 ~ "Weekday",
+    TRUE ~ "Weekend"
+  ))
+# 
+head(Ontario_demand_hourly)
+tail(Ontario_demand_hourly)
+```
+
+
+
+```{r}
+## Rename columns
+
+Ontario_demand_hourly<-Ontario_demand_hourly[,c("Time","Precipitation","Temperature","IrradianceSurface","IrradianceToa","Snowfall","SnowMass","CloudCover","AirDensity","Demand","Location","Date","Holiday","Day_Type")]
+```
+
+
+
+
+```{r}
+## Daily data
+
+# Ontario data
+Ontario.Daily <- Ontario_demand_hourly %>%
+
+  index_by(Date = date(Time)) %>%
+  summarise(
+    Demand = mean(Demand),
+    Temperature = mean(Temperature),
+    Holiday = any(Holiday),
+    Precipitation = mean(Precipitation),
+    IrradianceSurface = mean(IrradianceSurface),
+    IrradianceToa = mean(IrradianceToa),
+    Snowfall = mean(Snowfall),
+    SnowMass = mean(SnowMass),
+    CloudCover = mean(CloudCover),
+    AirDensity = mean(AirDensity),
+  ) %>%
+  mutate(Day_Type = case_when(
+    Holiday ~ "Holiday",
+    wday(Date) %in% 2:6 ~ "Weekday",
+    TRUE ~ "Weekend"
+  ))
+
+Ontario.Daily <- Ontario.Daily %>%
+  mutate(Temperature2 = Temperature^2,
+         HolidayNew = if_else(Holiday == "TRUE", 1, 0),
+         Day_TypeNew = if_else(Day_Type == "Weekday", 1, 0))
+
+head(Ontario.Daily)
+tail(Ontario.Daily)
+```
+
+
+whether data: https://www.renewables.ninja/
+
+We believe Temperature is affected by other covariates (Precipitation, IrradianceSurface, IrradianceToa, Snowfall, SnowMass, CloudCover, AirDensity)  available in the data.
+
+Description of covariates:
+
+Air temperature (°C): Air temperature at 2 meters above ground. T2M variable in MERRA-2, converted from K.
+
+Precipitation (mm / hour): Total bias-corrected precipitation, over land only. PRECTOTLAND variable in MERRA-2, converted from kg m⁻² s⁻¹
+
+Snowfall (mm / hour): Total bias-corrected precipitation in the form of snow, over land only. PRECSNOLAND variable in MERRA-2, converted from kg m⁻² s⁻¹
+
+Snow mass (kg / m²): Amount of snow per land area. SNOMAS variable in MERRA-2, in native units.
+
+Air density (kg / m³): Air density at ground level. RHOA variable in MERRA-2, in native units.
+
+Ground-level solar irradiance (W / m²): Surface-level incident shortwave radiation flux, considering cloud cover and aerosols. SWGDN variable in MERRA-2, in native units. Note, MERRA-2 uses the mean annual climate for aerosols, rather than time-varying quantity.
+
+Top of atmosphere solar irradiance (W / m²): Top of atmosphere incident shortwave radiation flux, before cloud cover and aerosol influences. SWTDN variable in MERRA-2, in native units.
+
+Cloud cover fraction: Fraction of cloud cover, averaged over grid cell and summed over all height above ground. CLDTOT variable in MERRA-2, in native units (a [0, 1] scale).
+
+
+Check for multicollinearity among selected variables (Precipitation, IrradianceSurface, IrradianceToa, Snowfall, SnowMass, CloudCover, AirDensity).
+
+
+```{r}
+## VIF (Variance Inflation Factor)
+
+library(car)
+
+model.VIF <- lm(Temperature ~ Precipitation + IrradianceSurface + IrradianceToa + Snowfall + SnowMass + CloudCover + AirDensity, data = Ontario.Daily)
+
+summary(model.VIF)
+
+# Calculate VIF for selected variables
+vif_values <- vif(model.VIF)
+
+# Print VIF values
+print(vif_values)
+```
+
+
+The Variance Inflation Factor (VIF) is a measure that quantifies how much the variance of an estimated regression coefficient increases if your predictors are correlated. High VIF values (typically > 10) may indicate problematic levels of multicollinearity.
+
+Only for IrradianceSurface we observe a VIF value greater than 10 and VIF of IrradianceToa is close to 10.
+
+
+```{r}
+## Correlation Matrix
+
+Temp.Ontario.Daily <- Ontario.Daily
+
+colnames(Temp.Ontario.Daily) <- c("Date","Demand","Temperature","Holiday",
+                                  "Precipitation","Irradiance (surface)",
+                                  "Irradiance (atmosphere)","Snowfall",
+                                  "Snow Mass","Cloud Cover","Air Density",
+                                  "Day_Type","Temperature2",
+                                  "HolidayNew","Day_TypeNew")
+
+# Create a correlation matrix for selected variables
+cor_matrix <- cor(Temp.Ontario.Daily[, c("Precipitation", "Irradiance (surface)", "Irradiance (atmosphere)", "Snowfall",  "Snow Mass",  "Cloud Cover", "Air Density")])
+
+# Print the correlation matrix
+print(cor_matrix)
+```
+
+
+High correlation coefficients (close to 1 or -1) may suggest multicollinearity. 
+
+Corr(IrradianceToa, IrradianceSurface) = 0.8585024
+Corr(IrradianceSurface, CloudCover) = -0.6143980
+Corr(IrradianceSurface, AirDensity) = -0.6453389
+Corr(IrradianceToa, AirDensity) = -0.7476595
+
+
+We can visualize the correlation matrix using tools like corrplot for better insight:
+
+```{r}
+library(corrplot)
+
+# Plot the correlation matrix
+corrplot(cor_matrix, method = "color", tl.col="black")
+```
+
+
+Thus, we may omit "IrradianceSurface" and "IrradianceToa" from future models for Temperature to avoid multicollinearity.
+
+
+## Temperature forecasts
+
+```{r}
+## Training (75%) and testing (25%) datasets
+
+Temp.Train <- Ontario.Daily %>% filter(Date <= "2019-06-30")
+Temp.Test <- Ontario.Daily %>% filter(Date > "2019-06-30")
+```
+
+
+
+```{r}
+library(fable.prophet)
+## Prophet Model (with covariates)
+Prophet.Model.Temp2 <- Temp.Train %>%
+  model(prophet(Temperature ~ Precipitation + Snowfall + SnowMass + 
+                  CloudCover + AirDensity))
+fore.Prophet.Temp2 <- Prophet.Model.Temp2 %>% forecast(Temp.Test)
+Prophet.Test.Accuracy2 <- fabletools::accuracy(fore.Prophet.Temp2, Temp.Test)
+xtable(Prophet.Test.Accuracy2)
+```
+
+
+
+```{r}
+## ARIMA Model (with covariates)
+ARIMA.Model.Temp2 <- Temp.Train %>%
+  model(ARIMA(Temperature ~ Precipitation + Snowfall + SnowMass + CloudCover + AirDensity))
+ARIMA.Model.Temp2
+fore.ARIMA.Temp2 <- ARIMA.Model.Temp2 %>% forecast(Temp.Test)
+ARIMA.Test.Accuracy2 <- fabletools::accuracy(fore.ARIMA.Temp2, Temp.Test)
+xtable(ARIMA.Test.Accuracy2)
+
+```
+
+
+
+```{r}
+## nnetar Model (with covariates)
+nnetar.Model.Temp2 <- Temp.Train %>%
+  model(NNETAR(Temperature ~ Precipitation + Snowfall + SnowMass + CloudCover + AirDensity))
+nnetar.Model.Temp2
+fore.nnetar.Temp2 <- nnetar.Model.Temp2 %>% forecast(Temp.Test)
+nnetar.Test.Accuracy2 <- fabletools::accuracy(fore.nnetar.Temp2, Temp.Test)
+xtable(nnetar.Test.Accuracy2)
+```
+
+
+
+```{r}
+## TSLM (with covariates)
+TSLM.Model.Temp2 <- Temp.Train %>%
+  model(TSLM(Temperature ~ Precipitation + Snowfall + SnowMass + CloudCover + AirDensity))
+fore.TSLM.Temp2 <- TSLM.Model.Temp2 %>% forecast(Temp.Test)
+TSLM.Temp.Accuracy2 <- fabletools::accuracy(fore.TSLM.Temp2, Temp.Test)
+xtable(TSLM.Temp.Accuracy2)
+
+```
+
+

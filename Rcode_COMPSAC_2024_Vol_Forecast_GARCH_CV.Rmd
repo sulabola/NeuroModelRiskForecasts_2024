@@ -1,0 +1,399 @@
+---
+title: 'Rcode: COMPSAC 2024'
+author: "Sulalitha Bowala"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+rm(list=ls(all=TRUE)) # Remove objects from environment
+set.seed(12)
+```
+
+
+
+```{r, message=FALSE}
+### Call packages
+require("tseries") # load the tseries library
+require("zoo")
+require("moments")
+require("car")
+require("MASS")
+require("stats")  
+require("VGAM")
+require("fGarch")
+require("quantmod") # To download data alternatively
+require("PerformanceAnalytics") # To draw Timeseries graphs
+require("scales")
+require("PEIP")
+require("dplyr")
+require("lubridate")
+require("tidyverse")
+require("gridExtra")
+require("gdata")
+require("xtable")
+require("vioplot")
+require("fpp3")
+require("readr")
+require("tis")
+require("tibble")
+require("tsibble")
+require("stringr")
+require("magrittr")
+require("fable")
+require("Metrics") # rmse()
+require("forecast")
+```
+
+
+
+```{r}
+# Download data
+start.date = '2016-01-01' # starting date of stock
+end.date = '2018-12-31' # ending date of stock
+
+# Download Google (GOOG) from Yahoo finance
+getSymbols("GOOG", src = "yahoo", from = start.date, to = end.date)
+GOOG <- na.omit(GOOG)
+# create date variable
+GOOG <- zoo::fortify.zoo(GOOG)
+# Rename date variable
+GOOG <- GOOG %>% rename("Date" = "Index")
+# create tissble object
+GOOG <- as_tsibble(GOOG, index = Date) # create tissble object
+# Re-index based on trading days (as there are some missing days)
+GOOG_stock <- GOOG |>
+  mutate(day = row_number()) |>
+  update_tsibble(index = day, regular = TRUE)
+
+
+
+# Download VIX (^VIX) from Yahoo finance
+getSymbols("^VIX", src = "yahoo", from = start.date, to = end.date)
+VIX <- na.omit(VIX)
+# create date variable
+VIX <- zoo::fortify.zoo(VIX)
+# Rename date variable
+VIX <- VIX %>% rename("Date" = "Index")
+# create tissble object
+VIX <- as_tsibble(VIX, index = Date) # create tissble object
+# Re-index based on trading days (as there are some missing days)
+VIX_stock <- VIX |>
+  mutate(day = row_number()) |>
+  update_tsibble(index = day, regular = TRUE)
+
+
+# Download Bitcoin (BTC-USD) from Yahoo finance
+BTC <- getSymbols("BTC-USD", from = start.date, to = end.date, source="yahoo", auto.assign=FALSE, return.class="xts")
+BTC <- na.omit(BTC)
+# create date variable
+BTC <- zoo::fortify.zoo(BTC)
+# Rename date variable
+BTC <- BTC %>% rename("Date" = "Index")
+# create tissble object
+BTC <- as_tsibble(BTC, index = Date) # create tissble object
+# Re-index based on trading days (as there are some missing days)
+BTC_stock <- BTC |>
+  mutate(day = row_number()) |>
+  update_tsibble(index = day, regular = TRUE)
+colnames(BTC_stock) <- c("Date","BTC.Open","BTC.High","BTC.Low","BTC.Close","BTC.Volume","BTC.Adjusted","day")
+
+```
+
+
+
+```{r}
+GOOG.Train <- GOOG_stock
+dim(GOOG.Train)
+
+VIX.Train <- VIX_stock
+dim(VIX.Train)
+
+BTC.Train <- BTC_stock
+dim(BTC.Train)
+```
+
+
+## Google
+
+```{r}
+## Calculate volatility for entire data
+r.GOOG <- GOOG$GOOG.Adjusted %>% log %>% diff
+
+r.GOOG <- na.omit(r.GOOG)
+
+head(r.GOOG)
+length(r.GOOG)
+```
+
+
+```{r}
+## Obtain volatility forecasting using rolling window of log returns
+## Rolling window size is 150 days
+
+GOOG.r.RollWind <- list()
+
+for (i in 1:(length(r.GOOG)-149)) {
+  GOOG.r.RollWind[[i]] <- r.GOOG[1:(i+149)]
+}
+
+length(GOOG.r.RollWind[[1]])
+
+tail(GOOG.r.RollWind[[1]])
+tail(GOOG.r.RollWind[[2]])
+
+```
+
+
+```{r warning=FALSE}
+## GARCH Model
+T = length(GOOG.r.RollWind[[1]])
+
+sigma_rate.GOOG = c()
+omega = 0
+alpha = 0
+beta = 0
+
+for (i in 1:length(GOOG.r.RollWind)) {
+  
+  g = fGarch::garchFit(~garch(1,1),GOOG.r.RollWind[[i]],
+                       cond.dist="norm",include.mean=FALSE,trace=FALSE)
+  omega = g@fit$matcoef[1,1]
+  alpha = g@fit$matcoef[2,1]
+  beta = g@fit$matcoef[3,1]
+  sigma_rate.GOOG[i] =  omega + alpha * GOOG.r.RollWind[[i]][T]^2 + beta * g@h.t[T]
+}
+
+head(sigma_rate.GOOG)
+tail(sigma_rate.GOOG)
+```
+
+
+```{r}
+##Observed Volatility
+# calculate sign correlation rho
+rho.cal<-function(X){
+  rho.hat<-cor(sign(X-mean(X)), X-mean(X))
+  return(rho.hat)
+}
+# Function for observed volatility
+observed.vol <- function(X){
+  X.cdf <- ecdf(X)
+  return(abs(X - mean(X))/(2*rho.cal(X)*sqrt(X.cdf(mean(X))*(1-X.cdf(mean(X))))))
+}
+
+rho.GOOG <- rho.cal(r.GOOG)
+vol.GOOG <- observed.vol(as.numeric(r.GOOG))
+head(vol.GOOG)
+tail(vol.GOOG)
+```
+
+
+
+```{r}
+## Calculate errors
+vol.GOOG.observed <- tail(vol.GOOG,603)
+vol.GOOG.GARCH <- tail(sigma_rate.GOOG,603)
+
+RMSE.GOOG <- sqrt(mean((vol.GOOG.observed-vol.GOOG.GARCH)^2))
+RMSE.GOOG
+
+MAE.GOOG <- mean(abs(vol.GOOG.observed-vol.GOOG.GARCH))
+MAE.GOOG
+
+MAPE.GOOG <- mean(abs(100*(vol.GOOG.observed-vol.GOOG.GARCH)/vol.GOOG.observed))
+MAPE.GOOG
+```
+
+
+## VIX
+
+```{r}
+## Calculate volatility for entire data
+r.VIX <- VIX$VIX.Adjusted %>% log %>% diff
+
+r.VIX <- na.omit(r.VIX)
+
+head(r.VIX)
+length(r.VIX)
+```
+
+
+
+```{r}
+## Obtain volatility forecasting using rolling window of log returns
+## Rolling window size is 150 days
+
+VIX.r.RollWind <- list()
+
+for (i in 1:(length(r.VIX)-149)) {
+  VIX.r.RollWind[[i]] <- r.VIX[1:(i+149)]
+}
+
+length(VIX.r.RollWind[[1]])
+
+tail(VIX.r.RollWind[[1]])
+tail(VIX.r.RollWind[[2]])
+
+```
+
+
+```{r warning=FALSE}
+## GARCH Model
+T = length(VIX.r.RollWind[[1]])
+
+sigma_rate.VIX = c()
+omega = 0
+alpha = 0
+beta = 0
+
+for (i in 1:length(VIX.r.RollWind)) {
+  
+  g = fGarch::garchFit(~garch(1,1),VIX.r.RollWind[[i]],
+                       cond.dist="norm",include.mean=FALSE,trace=FALSE)
+  omega = g@fit$matcoef[1,1]
+  alpha = g@fit$matcoef[2,1]
+  beta = g@fit$matcoef[3,1]
+  sigma_rate.VIX[i] =  omega + alpha * VIX.r.RollWind[[i]][T]^2 + beta * g@h.t[T]
+}
+
+head(sigma_rate.VIX)
+tail(sigma_rate.VIX)
+```
+
+
+```{r}
+##Observed Volatility
+# calculate sign correlation rho
+rho.cal<-function(X){
+  rho.hat<-cor(sign(X-mean(X)), X-mean(X))
+  return(rho.hat)
+}
+# Function for observed volatility
+observed.vol <- function(X){
+  X.cdf <- ecdf(X)
+  return(abs(X - mean(X))/(2*rho.cal(X)*sqrt(X.cdf(mean(X))*(1-X.cdf(mean(X))))))
+}
+
+rho.VIX <- rho.cal(r.VIX)
+vol.VIX <- observed.vol(as.numeric(r.VIX))
+head(vol.VIX)
+tail(vol.VIX)
+```
+
+
+
+```{r}
+## Calculate errors
+vol.VIX.observed <- tail(vol.VIX,603)
+vol.VIX.GARCH <- tail(sigma_rate.VIX,603)
+
+RMSE.VIX <- sqrt(mean((vol.VIX.observed-vol.VIX.GARCH)^2))
+RMSE.VIX
+
+MAE.VIX <- mean(abs(vol.VIX.observed-vol.VIX.GARCH))
+MAE.VIX
+
+MAPE.VIX <- mean(abs(100*(vol.VIX.observed-vol.VIX.GARCH)/vol.VIX.observed))
+MAPE.VIX
+```
+
+
+
+## Bitcoin
+
+```{r}
+## Calculate volatility for entire data
+r.BTC <- BTC$`BTC-USD.Adjusted` %>% log %>% diff
+
+r.BTC <- na.omit(r.BTC)
+
+head(r.BTC)
+length(r.BTC)
+```
+
+
+
+```{r}
+## Obtain volatility forecasting using rolling window of log returns
+## Rolling window size is 150 days
+
+BTC.r.RollWind <- list()
+
+for (i in 1:(length(r.BTC)-149)) {
+  BTC.r.RollWind[[i]] <- r.BTC[1:(i+149)]
+}
+
+length(BTC.r.RollWind[[1]])
+
+tail(BTC.r.RollWind[[1]])
+tail(BTC.r.RollWind[[2]])
+
+```
+
+
+```{r warning=FALSE}
+## GARCH Model
+T = length(BTC.r.RollWind[[1]])
+
+sigma_rate.BTC = c()
+omega = 0
+alpha = 0
+beta = 0
+
+for (i in 1:length(BTC.r.RollWind)) {
+  
+  g = fGarch::garchFit(~garch(1,1),BTC.r.RollWind[[i]],
+                       cond.dist="norm",include.mean=FALSE,trace=FALSE)
+  omega = g@fit$matcoef[1,1]
+  alpha = g@fit$matcoef[2,1]
+  beta = g@fit$matcoef[3,1]
+  sigma_rate.BTC[i] =  omega + alpha * BTC.r.RollWind[[i]][T]^2 + beta * g@h.t[T]
+}
+
+head(sigma_rate.BTC)
+tail(sigma_rate.BTC)
+```
+
+
+```{r}
+##Observed Volatility
+# calculate sign correlation rho
+rho.cal<-function(X){
+  rho.hat<-cor(sign(X-mean(X)), X-mean(X))
+  return(rho.hat)
+}
+# Function for observed volatility
+observed.vol <- function(X){
+  X.cdf <- ecdf(X)
+  return(abs(X - mean(X))/(2*rho.cal(X)*sqrt(X.cdf(mean(X))*(1-X.cdf(mean(X))))))
+}
+
+rho.BTC <- rho.cal(r.BTC)
+vol.BTC <- observed.vol(as.numeric(r.BTC))
+head(vol.BTC)
+tail(vol.BTC)
+```
+
+
+
+```{r}
+## Calculate errors
+vol.BTC.observed <- tail(vol.BTC,946)
+vol.BTC.GARCH <- tail(sigma_rate.BTC,946)
+
+RMSE.BTC <- sqrt(mean((vol.BTC.observed-vol.BTC.GARCH)^2))
+RMSE.BTC
+
+MAE.BTC <- mean(abs(vol.BTC.observed-vol.BTC.GARCH))
+MAE.BTC
+
+MAPE.BTC <- mean(abs(100*(vol.BTC.observed-vol.BTC.GARCH)/vol.BTC.observed))
+MAPE.BTC
+```
+
+

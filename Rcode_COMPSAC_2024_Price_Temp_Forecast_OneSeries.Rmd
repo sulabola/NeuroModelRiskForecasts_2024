@@ -1,0 +1,638 @@
+---
+title: 'Rcode: COMPSAC 2024'
+author: "Sulalitha Bowala"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+rm(list=ls(all=TRUE)) # Remove objects from environment
+set.seed(12)
+```
+
+
+
+```{r, message=FALSE}
+### Call packages
+require("tseries") # load the tseries library
+require("zoo")
+require("moments")
+require("car")
+require("MASS")
+require("stats")  
+require("VGAM")
+require("fGarch")
+require("quantmod") # To download data alternatively
+require("PerformanceAnalytics") # To draw Timeseries graphs
+require("scales")
+require("PEIP")
+require("dplyr")
+require("lubridate")
+require("tidyverse")
+require("gridExtra")
+require("gdata")
+require("xtable")
+require("vioplot")
+require("fpp3")
+require("readr")
+require("tis")
+require("tibble")
+require("tsibble")
+require("stringr")
+require("magrittr")
+require("fable")
+require("Metrics") # rmse()
+require("forecast")
+```
+
+
+
+```{r}
+# Download data
+start.date = '2016-01-01' # starting date of stock
+end.date = '2018-12-31' # ending date of stock
+
+# Download Google (GOOG) from Yahoo finance
+getSymbols("GOOG", src = "yahoo", from = start.date, to = end.date)
+GOOG <- na.omit(GOOG)
+# create date variable
+GOOG <- zoo::fortify.zoo(GOOG)
+# Rename date variable
+GOOG <- GOOG %>% rename("Date" = "Index")
+# create tissble object
+GOOG <- as_tsibble(GOOG, index = Date) # create tissble object
+# Re-index based on trading days (as there are some missing days)
+GOOG_stock <- GOOG |>
+  mutate(day = row_number()) |>
+  update_tsibble(index = day, regular = TRUE)
+
+
+
+# Download VIX (^VIX) from Yahoo finance
+getSymbols("^VIX", src = "yahoo", from = start.date, to = end.date)
+VIX <- na.omit(VIX)
+# create date variable
+VIX <- zoo::fortify.zoo(VIX)
+# Rename date variable
+VIX <- VIX %>% rename("Date" = "Index")
+# create tissble object
+VIX <- as_tsibble(VIX, index = Date) # create tissble object
+# Re-index based on trading days (as there are some missing days)
+VIX_stock <- VIX |>
+  mutate(day = row_number()) |>
+  update_tsibble(index = day, regular = TRUE)
+
+
+# Download Bitcoin (BTC-USD) from Yahoo finance
+BTC <- getSymbols("BTC-USD", from = start.date, to = end.date, source="yahoo", auto.assign=FALSE, return.class="xts")
+BTC <- na.omit(BTC)
+# create date variable
+BTC <- zoo::fortify.zoo(BTC)
+# Rename date variable
+BTC <- BTC %>% rename("Date" = "Index")
+# create tissble object
+BTC <- as_tsibble(BTC, index = Date) # create tissble object
+# Re-index based on trading days (as there are some missing days)
+BTC_stock <- BTC |>
+  mutate(day = row_number()) |>
+  update_tsibble(index = day, regular = TRUE)
+colnames(BTC_stock) <- c("Date","BTC.Open","BTC.High","BTC.Low","BTC.Close","BTC.Volume","BTC.Adjusted","day")
+
+```
+
+
+
+```{r}
+## Import data
+## Ontario data
+
+Ontario_demand_hourly <- read.csv("Data_2018_2019.csv")
+```
+
+
+```{r}
+### Manipulate hourly data to obtain daily data
+### + create a new categorical variable (day-type)
+
+Ontario_demand_hourly$Time <- as.POSIXct(Ontario_demand_hourly$Time, "%Y-%m-%d %H:%M:%S")
+Ontario_demand_hourly$Temperature <- Ontario_demand_hourly$Temperature
+Ontario_demand_hourly$Precipitation <- Ontario_demand_hourly$Precipitation
+Ontario_demand_hourly$CloudCover <- Ontario_demand_hourly$CloudCover
+Ontario_demand_hourly$IrradianceSurface <- Ontario_demand_hourly$IrradianceSurface
+Ontario_demand_hourly$IrradianceToa <- Ontario_demand_hourly$IrradianceToa
+Ontario_demand_hourly$Snowfall <- Ontario_demand_hourly$Snowfall
+Ontario_demand_hourly$SnowMass <- Ontario_demand_hourly$SnowMass
+Ontario_demand_hourly$Location <- Ontario_demand_hourly$Location
+Ontario_demand_hourly <- as_tsibble(Ontario_demand_hourly,index = 'Time',key = 'Location')
+
+Ontario_demand_hourly <- Ontario_demand_hourly %>% 
+  mutate(
+    Date = date( Time)
+  )
+Ontario_demand_hourly <- Ontario_demand_hourly %>% 
+  mutate(
+    Holiday = isHoliday(Ontario_demand_hourly$Date)
+  )
+Ontario_demand_hourly <- Ontario_demand_hourly %>%
+ mutate(Day_Type = case_when(
+    Holiday ~ "Holiday",
+    wday(Date) %in% 2:6 ~ "Weekday",
+    TRUE ~ "Weekend"
+  ))
+# 
+head(Ontario_demand_hourly)
+tail(Ontario_demand_hourly)
+```
+
+
+```{r}
+## Rename columns
+
+Ontario_demand_hourly<-Ontario_demand_hourly[,c("Time","Precipitation","Temperature","IrradianceSurface","IrradianceToa","Snowfall","SnowMass","CloudCover","AirDensity","Demand","Location","Date","Holiday","Day_Type")]
+```
+
+
+
+
+```{r}
+## Daily data
+
+# Ontario data
+Ontario.Daily <- Ontario_demand_hourly %>%
+
+  index_by(Date = date(Time)) %>%
+  summarise(
+    Demand = mean(Demand),
+    Temperature = mean(Temperature),
+    Holiday = any(Holiday),
+    Precipitation = mean(Precipitation),
+    IrradianceSurface = mean(IrradianceSurface),
+    IrradianceToa = mean(IrradianceToa),
+    Snowfall = mean(Snowfall),
+    SnowMass = mean(SnowMass),
+    CloudCover = mean(CloudCover),
+    AirDensity = mean(AirDensity),
+  ) %>%
+  mutate(Day_Type = case_when(
+    Holiday ~ "Holiday",
+    wday(Date) %in% 2:6 ~ "Weekday",
+    TRUE ~ "Weekend"
+  ))
+
+Ontario.Daily <- Ontario.Daily %>%
+  mutate(Temperature2 = Temperature^2,
+         HolidayNew = if_else(Holiday == "TRUE", 1, 0),
+         Day_TypeNew = if_else(Day_Type == "Weekday", 1, 0))
+
+head(Ontario.Daily)
+tail(Ontario.Daily)
+```
+
+
+whether data: https://www.renewables.ninja/
+
+We believe Temperature is affected by other covariates (Precipitation, IrradianceSurface, IrradianceToa, Snowfall, SnowMass, CloudCover, AirDensity)  available in the data.
+
+Description of covariates:
+
+Air temperature (°C): Air temperature at 2 meters above ground. T2M variable in MERRA-2, converted from K.
+
+Precipitation (mm / hour): Total bias-corrected precipitation, over land only. PRECTOTLAND variable in MERRA-2, converted from kg m⁻² s⁻¹
+
+Snowfall (mm / hour): Total bias-corrected precipitation in the form of snow, over land only. PRECSNOLAND variable in MERRA-2, converted from kg m⁻² s⁻¹
+
+Snow mass (kg / m²): Amount of snow per land area. SNOMAS variable in MERRA-2, in native units.
+
+Air density (kg / m³): Air density at ground level. RHOA variable in MERRA-2, in native units.
+
+Ground-level solar irradiance (W / m²): Surface-level incident shortwave radiation flux, considering cloud cover and aerosols. SWGDN variable in MERRA-2, in native units. Note, MERRA-2 uses the mean annual climate for aerosols, rather than time-varying quantity.
+
+Top of atmosphere solar irradiance (W / m²): Top of atmosphere incident shortwave radiation flux, before cloud cover and aerosol influences. SWTDN variable in MERRA-2, in native units.
+
+Cloud cover fraction: Fraction of cloud cover, averaged over grid cell and summed over all height above ground. CLDTOT variable in MERRA-2, in native units (a [0, 1] scale).
+
+
+Check for multicollinearity among selected variables (Precipitation, IrradianceSurface, IrradianceToa, Snowfall, SnowMass, CloudCover, AirDensity).
+
+
+```{r}
+## VIF (Variance Inflation Factor)
+
+library(car)
+
+model.VIF <- lm(Temperature ~ Precipitation + IrradianceSurface + IrradianceToa + Snowfall + SnowMass + CloudCover + AirDensity, data = Ontario.Daily)
+
+summary(model.VIF)
+
+# Calculate VIF for selected variables
+vif_values <- vif(model.VIF)
+
+# Print VIF values
+print(vif_values)
+```
+
+
+The Variance Inflation Factor (VIF) is a measure that quantifies how much the variance of an estimated regression coefficient increases if your predictors are correlated. High VIF values (typically > 10) may indicate problematic levels of multicollinearity.
+
+Only for IrradianceSurface we observe a VIF value greater than 10 and VIF of IrradianceToa is close to 10.
+
+
+```{r}
+## Correlation Matrix
+
+Temp.Ontario.Daily <- Ontario.Daily
+
+colnames(Temp.Ontario.Daily) <- c("Date","Demand","Temperature","Holiday",
+                                  "Precipitation","Irradiance (surface)",
+                                  "Irradiance (atmosphere)","Snowfall",
+                                  "Snow Mass","Cloud Cover","Air Density",
+                                  "Day_Type","Temperature2",
+                                  "HolidayNew","Day_TypeNew")
+
+# Create a correlation matrix for selected variables
+cor_matrix <- cor(Temp.Ontario.Daily[, c("Precipitation", "Irradiance (surface)", "Irradiance (atmosphere)", "Snowfall",  "Snow Mass",  "Cloud Cover", "Air Density")])
+
+# Print the correlation matrix
+print(cor_matrix)
+```
+
+
+High correlation coefficients (close to 1 or -1) may suggest multicollinearity. 
+
+Corr(IrradianceToa, IrradianceSurface) = 0.8585024
+Corr(IrradianceSurface, CloudCover) = -0.6143980
+Corr(IrradianceSurface, AirDensity) = -0.6453389
+Corr(IrradianceToa, AirDensity) = -0.7476595
+
+
+We can visualize the correlation matrix using tools like corrplot for better insight:
+
+```{r}
+library(corrplot)
+
+# Plot the correlation matrix
+corrplot(cor_matrix, method = "color", tl.col="black")
+```
+
+
+Thus, we may omit "IrradianceSurface" and "IrradianceToa" from future models for Temperature to avoid multicollinearity.
+
+
+
+## Price forecasts (Google, VIX, BTC) and Temperature forecasts
+
+```{r}
+GOOG.Train <- GOOG_stock
+
+VIX.Train <- VIX_stock
+
+BTC.Train <- BTC_stock
+
+Temp.Train <- Ontario.Daily
+
+```
+
+
+```{r}
+plot(GOOG.Train$GOOG.Adjusted, type = "l")
+
+plot(VIX.Train$VIX.Adjusted, type = "l")
+
+plot(BTC.Train$BTC.Adjusted, type = "l")
+```
+
+
+
+## Price forecasts (Google)
+
+```{r}
+# Time series cross-validation accuracy (Creating Training dataset)
+GOOG.Train.tr <- GOOG.Train |>
+  stretch_tsibble(.init = 150, .step = 1) |>
+  relocate(Date, .id)
+head(GOOG.Train.tr)
+
+
+# TSCV accuracy
+
+## Naive model
+Naive.Model.GOOG <- GOOG.Train.tr %>%
+  model(NAIVE(GOOG.Adjusted))
+fore.Naive.GOOG <- Naive.Model.GOOG %>% forecast(h=1)
+Naive.GOOG.Accuracy <- fabletools::accuracy(fore.Naive.GOOG, GOOG.Train)
+xtable(Naive.GOOG.Accuracy, digits = 4)
+
+
+## Drift model
+Drift.Model.GOOG <- GOOG.Train.tr %>%
+  model(RW(GOOG.Adjusted~drift()))
+fore.Drift.GOOG <- Drift.Model.GOOG %>% forecast(h=1)
+Drift.GOOG.Accuracy <- fabletools::accuracy(fore.Drift.GOOG, GOOG.Train)
+xtable(Drift.GOOG.Accuracy)
+
+
+## Prophet model
+library(fable.prophet)
+Prophet.Model.GOOG <- GOOG.Train.tr %>%
+  model(prophet(GOOG.Adjusted))
+fore.Prophet.GOOG <- Prophet.Model.GOOG %>% forecast(h=1)
+Prophet.GOOG.Accuracy <- fabletools::accuracy(fore.Prophet.GOOG, GOOG.Train)
+xtable(Prophet.GOOG.Accuracy)
+
+
+## ARIMA model
+ARIMA.Model.GOOG <- GOOG.Train.tr %>%
+  model(ARIMA(GOOG.Adjusted))
+#ARIMA.Model.GOOG
+fore.ARIMA.GOOG <- ARIMA.Model.GOOG %>% forecast(h=1)
+ARIMA.GOOG.Accuracy <- fabletools::accuracy(fore.ARIMA.GOOG, GOOG.Train)
+xtable(ARIMA.GOOG.Accuracy)
+## ARIMA model for the study period
+GOOG.Train %>% model(ARIMA(GOOG.Adjusted))
+
+
+## nnetar model
+nnetar.Model.GOOG <- GOOG.Train.tr %>%
+  model(NNETAR(GOOG.Adjusted))
+#nnetar.Model.GOOG
+fore.nnetar.GOOG <- nnetar.Model.GOOG %>% forecast(h=1)
+nnetar.GOOG.Accuracy <- fabletools::accuracy(fore.nnetar.GOOG, GOOG.Train)
+xtable(nnetar.GOOG.Accuracy)
+## nnetar model for the study period
+GOOG.Train %>% model(NNETAR(GOOG.Adjusted))
+
+
+## EWMA model
+EWMA.Model.GOOG <- GOOG.Train.tr %>%
+  model(ETS(GOOG.Adjusted))
+fore.EWMA.GOOG <- EWMA.Model.GOOG %>% forecast(h=1)
+EWMA.GOOG.Accuracy <- fabletools::accuracy(fore.EWMA.GOOG, GOOG.Train)
+xtable(EWMA.GOOG.Accuracy)
+
+```
+
+
+
+## Price forecasts (VIX)
+
+```{r}
+# Time series cross-validation accuracy (Creating Training dataset)
+VIX.Train.tr <- VIX.Train |>
+  stretch_tsibble(.init = 150, .step = 1) |>
+  relocate(Date, .id)
+head(VIX.Train.tr)
+
+
+# TSCV accuracy
+
+## Naive model
+Naive.Model.VIX <- VIX.Train.tr %>%
+  model(NAIVE(VIX.Adjusted))
+fore.Naive.VIX <- Naive.Model.VIX %>% forecast(h=1)
+Naive.VIX.Accuracy <- fabletools::accuracy(fore.Naive.VIX, VIX.Train)
+xtable(Naive.VIX.Accuracy)
+
+
+## Drift model
+Drift.Model.VIX <- VIX.Train.tr %>%
+  model(RW(VIX.Adjusted~drift()))
+fore.Drift.VIX <- Drift.Model.VIX %>% forecast(h=1)
+Drift.VIX.Accuracy <- fabletools::accuracy(fore.Drift.VIX, VIX.Train)
+xtable(Drift.VIX.Accuracy)
+
+
+## Prophet model
+#library(fable.prophet)
+Prophet.Model.VIX <- VIX.Train.tr %>%
+  model(prophet(VIX.Adjusted))
+fore.Prophet.VIX <- Prophet.Model.VIX %>% forecast(h=1)
+Prophet.VIX.Accuracy <- fabletools::accuracy(fore.Prophet.VIX, VIX.Train)
+xtable(Prophet.VIX.Accuracy)
+
+
+## ARIMA model
+ARIMA.Model.VIX <- VIX.Train.tr %>%
+  model(ARIMA(VIX.Adjusted))
+#ARIMA.Model.VIX
+fore.ARIMA.VIX <- ARIMA.Model.VIX %>% forecast(h=1)
+ARIMA.VIX.Accuracy <- fabletools::accuracy(fore.ARIMA.VIX, VIX.Train)
+xtable(ARIMA.VIX.Accuracy)
+## ARIMA model for the study period
+VIX.Train %>% model(ARIMA(VIX.Adjusted))
+
+
+## nnetar model
+nnetar.Model.VIX <- VIX.Train.tr %>%
+  model(NNETAR(VIX.Adjusted))
+#nnetar.Model.VIX
+fore.nnetar.VIX <- nnetar.Model.VIX %>% forecast(h=1)
+nnetar.VIX.Accuracy <- fabletools::accuracy(fore.nnetar.VIX, VIX.Train)
+xtable(nnetar.VIX.Accuracy)
+## nnetar model for the study period
+VIX.Train %>% model(NNETAR(VIX.Adjusted))
+
+
+## EWMA model
+EWMA.Model.VIX <- VIX.Train.tr %>%
+  model(ETS(VIX.Adjusted))
+fore.EWMA.VIX <- EWMA.Model.VIX %>% forecast(h=1)
+EWMA.VIX.Accuracy <- fabletools::accuracy(fore.EWMA.VIX, VIX.Train)
+xtable(EWMA.VIX.Accuracy)
+
+```
+
+
+
+## Price forecasts (BTC)
+
+```{r}
+# Time series cross-validation accuracy (Creating Training dataset)
+BTC.Train.tr <- BTC.Train |>
+  stretch_tsibble(.init = 220, .step = 1) |>
+  relocate(Date, .id)
+head(BTC.Train.tr)
+
+
+# TSCV accuracy
+
+## Naive model
+Naive.Model.BTC <- BTC.Train.tr %>%
+  model(NAIVE(BTC.Adjusted))
+fore.Naive.BTC <- Naive.Model.BTC %>% forecast(h=1)
+Naive.BTC.Accuracy <- fabletools::accuracy(fore.Naive.BTC, BTC.Train)
+xtable(Naive.BTC.Accuracy)
+
+
+## Drift model
+Drift.Model.BTC <- BTC.Train.tr %>%
+  model(RW(BTC.Adjusted~drift()))
+fore.Drift.BTC <- Drift.Model.BTC %>% forecast(h=1)
+Drift.BTC.Accuracy <- fabletools::accuracy(fore.Drift.BTC, BTC.Train)
+xtable(Drift.BTC.Accuracy)
+
+
+## Prophet model
+#library(fable.prophet)
+Prophet.Model.BTC <- BTC.Train.tr %>%
+  model(prophet(BTC.Adjusted))
+fore.Prophet.BTC <- Prophet.Model.BTC %>% forecast(h=1)
+Prophet.BTC.Accuracy <- fabletools::accuracy(fore.Prophet.BTC, BTC.Train)
+xtable(Prophet.BTC.Accuracy)
+
+
+## ARIMA model
+ARIMA.Model.BTC <- BTC.Train.tr %>%
+  model(ARIMA(BTC.Adjusted))
+#ARIMA.Model.BTC
+fore.ARIMA.BTC <- ARIMA.Model.BTC %>% forecast(h=1)
+ARIMA.BTC.Accuracy <- fabletools::accuracy(fore.ARIMA.BTC, BTC.Train)
+xtable(ARIMA.BTC.Accuracy)
+## ARIMA model for the study period
+BTC.Train %>% model(ARIMA(BTC.Adjusted))
+
+
+## nnetar model
+nnetar.Model.BTC <- BTC.Train.tr %>%
+  model(NNETAR(BTC.Adjusted))
+#nnetar.Model.BTC
+fore.nnetar.BTC <- nnetar.Model.BTC %>% forecast(h=1)
+nnetar.BTC.Accuracy <- fabletools::accuracy(fore.nnetar.BTC, BTC.Train)
+xtable(nnetar.BTC.Accuracy)
+## nnetar model for the study period
+BTC.Train %>% model(NNETAR(BTC.Adjusted))
+
+
+## EWMA model
+EWMA.Model.BTC <- BTC.Train.tr %>%
+  model(ETS(BTC.Adjusted))
+fore.EWMA.BTC <- EWMA.Model.BTC %>% forecast(h=1)
+EWMA.BTC.Accuracy <- fabletools::accuracy(fore.EWMA.BTC, BTC.Train)
+xtable(EWMA.BTC.Accuracy)
+
+```
+
+
+
+## Temperature forecasts
+
+```{r}
+# Time series cross-validation accuracy (Creating Training dataset)
+Temp.Train.tr <- Temp.Train |>
+  stretch_tsibble(.init = 150, .step = 1) |>
+  relocate(Date, .id)
+head(Temp.Train.tr)
+```
+
+
+
+```{r}
+# TSCV accuracy
+
+## Mean model
+Mean.Model.Temp <- Temp.Train.tr %>%
+  model(MEAN(Temperature))
+fore.Mean.Temp <- Mean.Model.Temp %>% forecast(h=1)
+Mean.Temp.Accuracy <- fabletools::accuracy(fore.Mean.Temp, Temp.Train)
+xtable(Mean.Temp.Accuracy)
+```
+
+
+
+```{r}
+## Naive model
+Naive.Model.Temp <- Temp.Train.tr %>%
+  model(NAIVE(Temperature))
+fore.Naive.Temp <- Naive.Model.Temp %>% forecast(h=1)
+Naive.Temp.Accuracy <- fabletools::accuracy(fore.Naive.Temp, Temp.Train)
+xtable(Naive.Temp.Accuracy)
+```
+
+
+
+```{r}
+## Seasonal Naive model
+SNaive.Model.Temp <- Temp.Train.tr %>%
+  model(SNAIVE(Temperature))
+fore.SNaive.Temp <- SNaive.Model.Temp %>% forecast(h=1)
+SNaive.Temp.Accuracy <- fabletools::accuracy(fore.SNaive.Temp, Temp.Train)
+xtable(SNaive.Temp.Accuracy)
+```
+
+
+
+```{r}
+## Drift model
+Drift.Model.Temp <- Temp.Train.tr %>%
+  model(RW(Temperature~drift()))
+fore.Drift.Temp <- Drift.Model.Temp %>% forecast(h=1)
+Drift.Temp.Accuracy <- fabletools::accuracy(fore.Drift.Temp, Temp.Train)
+xtable(Drift.Temp.Accuracy)
+```
+
+
+
+```{r}
+## Prophet Model (without covariates)
+Prophet.Model.Temp1 <- Temp.Train.tr %>%
+  model(prophet(Temperature))
+fore.Prophet.Temp1 <- Prophet.Model.Temp1 %>% forecast(h=1)
+Prophet.Test.Accuracy1 <- fabletools::accuracy(fore.Prophet.Temp1, Temp.Train)
+xtable(Prophet.Test.Accuracy1)
+```
+
+
+
+```{r}
+## ARIMA Model (without covariates)
+ARIMA.Model.Temp1 <- Temp.Train.tr %>%
+  model(ARIMA(Temperature))
+#ARIMA.Model.Temp1
+fore.ARIMA.Temp1 <- ARIMA.Model.Temp1 %>% forecast(h=1)
+ARIMA.Test.Accuracy1 <- fabletools::accuracy(fore.ARIMA.Temp1, Temp.Train)
+xtable(ARIMA.Test.Accuracy1)
+## ARIMA model for the study period
+Temp.Train %>% model(ARIMA(Temperature))
+```
+
+
+
+```{r}
+## nnetar Model (without covariates)
+nnetar.Model.Temp1 <- Temp.Train.tr %>%
+  model(NNETAR(Temperature))
+nnetar.Model.Temp1
+fore.nnetar.Temp1 <- nnetar.Model.Temp1 %>% forecast(h=1)
+nnetar.Test.Accuracy1 <- fabletools::accuracy(fore.nnetar.Temp1, Temp.Train)
+xtable(nnetar.Test.Accuracy1)
+## nnetar model for the study period
+Temp.Train %>% model(NNETAR(Temperature))
+```
+
+
+
+```{r}
+## EWMA model
+EWMA.Model.Temp <- Temp.Train.tr %>%
+  model(ETS(Temperature))
+fore.EWMA.Temp <- EWMA.Model.Temp %>% forecast(h=1)
+EWMA.Temp.Accuracy <- fabletools::accuracy(fore.EWMA.Temp, Temp.Train)
+xtable(EWMA.Temp.Accuracy)
+```
+
+
+
+```{r}
+## TSLM (without covariates)
+TSLM.Model.Temp1 <- Temp.Train.tr %>%
+  model(TSLM(Temperature))
+fore.TSLM.Temp1 <- TSLM.Model.Temp1 %>% forecast(h=1)
+TSLM.Temp.Accuracy1 <- fabletools::accuracy(fore.TSLM.Temp1, Temp.Train)
+xtable(TSLM.Temp.Accuracy1)
+```
+
+
+

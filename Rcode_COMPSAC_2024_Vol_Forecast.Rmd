@@ -1,0 +1,353 @@
+---
+title: 'Rcode: COMPSAC 2024'
+author: "Sulalitha Bowala"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+rm(list=ls(all=TRUE)) # Remove objects from environment
+set.seed(12)
+```
+
+
+
+```{r, message=FALSE}
+### Call packages
+require("tseries") # load the tseries library
+require("zoo")
+require("moments")
+require("car")
+require("MASS")
+require("stats")  
+require("VGAM")
+require("fGarch")
+require("quantmod") # To download data alternatively
+require("PerformanceAnalytics") # To draw Timeseries graphs
+require("scales")
+require("PEIP")
+require("dplyr")
+require("lubridate")
+require("tidyverse")
+require("gridExtra")
+require("gdata")
+require("xtable")
+require("vioplot")
+require("fpp3")
+require("readr")
+require("tis")
+require("tibble")
+require("tsibble")
+require("stringr")
+require("magrittr")
+require("fable")
+require("Metrics") # rmse()
+require("forecast")
+```
+
+
+
+```{r}
+# Download data
+start.date = '2016-01-01' # starting date of stock
+end.date = '2018-12-31' # ending date of stock
+
+# Download Google (GOOG) from Yahoo finance
+getSymbols("GOOG", src = "yahoo", from = start.date, to = end.date)
+GOOG <- na.omit(GOOG)
+# create date variable
+GOOG <- zoo::fortify.zoo(GOOG)
+# Rename date variable
+GOOG <- GOOG %>% rename("Date" = "Index")
+# create tissble object
+GOOG <- as_tsibble(GOOG, index = Date) # create tissble object
+# Re-index based on trading days (as there are some missing days)
+GOOG_stock <- GOOG |>
+  mutate(day = row_number()) |>
+  update_tsibble(index = day, regular = TRUE)
+
+
+
+# Download VIX (^VIX) from Yahoo finance
+getSymbols("^VIX", src = "yahoo", from = start.date, to = end.date)
+VIX <- na.omit(VIX)
+# create date variable
+VIX <- zoo::fortify.zoo(VIX)
+# Rename date variable
+VIX <- VIX %>% rename("Date" = "Index")
+# create tissble object
+VIX <- as_tsibble(VIX, index = Date) # create tissble object
+# Re-index based on trading days (as there are some missing days)
+VIX_stock <- VIX |>
+  mutate(day = row_number()) |>
+  update_tsibble(index = day, regular = TRUE)
+
+
+# Download Bitcoin (BTC-USD) from Yahoo finance
+BTC <- getSymbols("BTC-USD", from = start.date, to = end.date, source="yahoo", auto.assign=FALSE, return.class="xts")
+BTC <- na.omit(BTC)
+# create date variable
+BTC <- zoo::fortify.zoo(BTC)
+# Rename date variable
+BTC <- BTC %>% rename("Date" = "Index")
+# create tissble object
+BTC <- as_tsibble(BTC, index = Date) # create tissble object
+# Re-index based on trading days (as there are some missing days)
+BTC_stock <- BTC |>
+  mutate(day = row_number()) |>
+  update_tsibble(index = day, regular = TRUE)
+colnames(BTC_stock) <- c("Date","BTC.Open","BTC.High","BTC.Low","BTC.Close","BTC.Volume","BTC.Adjusted","day")
+
+```
+
+
+
+```{r}
+GOOG.Train <- GOOG_stock
+
+VIX.Train <- VIX_stock
+
+BTC.Train <- BTC_stock
+
+```
+
+
+```{r}
+plot(GOOG.Train$GOOG.Adjusted, type = "l")
+
+plot(VIX.Train$VIX.Adjusted, type = "l")
+
+plot(BTC.Train$BTC.Adjusted, type = "l")
+```
+
+
+
+## Observed Volatility (Google)
+
+```{r}
+## Calculate volatility for entire data
+r.GOOG <- GOOG$GOOG.Adjusted %>% log %>% diff
+# rbar.GOOG <- mean(r.GOOG)
+# rho.GOOG <- cor(r.GOOG-rbar.GOOG, sign(r.GOOG-rbar.GOOG))
+# vol.GOOG <- abs(r.GOOG-rbar.GOOG)/rho.GOOG
+
+
+# calculate sign correlation rho
+rho.cal<-function(X){
+  rho.hat<-cor(sign(X-mean(X)), X-mean(X))
+  return(rho.hat)
+}
+# Function for observed volatility
+observed.vol <- function(X){
+  X.cdf <- ecdf(X)
+  return(abs(X - mean(X))/(2*rho.cal(X)*sqrt(X.cdf(mean(X))*(1-X.cdf(mean(X))))))
+}
+rho.GOOG <- rho.cal(r.GOOG)
+vol.GOOG <- sqrt(252)*observed.vol(as.numeric(r.GOOG))
+
+
+vol.GOOG.Train <- vol.GOOG
+
+## New data frame for volatility (training data)
+GOOG.Train.Vol <- tsibble(
+  Date = GOOG_stock$Date[2:(length(vol.GOOG.Train)+1)],
+  Trading_day = 1:length(vol.GOOG.Train),
+  Volatility = vol.GOOG.Train,
+  index = Trading_day
+)
+head(GOOG.Train.Vol)
+
+
+# Time series cross-validation accuracy (Creating Training dataset)
+GOOG.Train.Vol.tr <- GOOG.Train.Vol |>
+  stretch_tsibble(.init = 150, .step = 1) |>
+  relocate(Date, .id)
+head(GOOG.Train.Vol.tr)
+
+
+# TSCV accuracy
+
+## Prophet model
+library(fable.prophet)
+Prophet.Vol.GOOG <- GOOG.Train.Vol.tr %>%
+  model(prophet(Volatility))
+fore.Prophet.Vol.GOOG <- Prophet.Vol.GOOG %>% forecast(h=1)
+Prophet.Vol.Accuracy.GOOG <- fabletools::accuracy(fore.Prophet.Vol.GOOG, GOOG.Train.Vol)
+xtable(Prophet.Vol.Accuracy.GOOG)
+
+
+## nnetar model
+nnetar.Vol.GOOG <- GOOG.Train.Vol.tr %>%
+  model(NNETAR(Volatility))
+nnetar.Vol.GOOG
+fore.nnetar.Vol.GOOG <- nnetar.Vol.GOOG %>% forecast(h=1)
+nnetar.Vol.Accuracy.GOOG <- fabletools::accuracy(fore.nnetar.Vol.GOOG, GOOG.Train.Vol)
+xtable(nnetar.Vol.Accuracy.GOOG)
+GOOG.Train.Vol %>% model(NNETAR(Volatility))
+
+
+## EWMA model
+EWMA.Vol.GOOG <- GOOG.Train.Vol.tr %>%
+  model(ETS(Volatility))
+fore.EWMA.Vol.GOOG <- EWMA.Vol.GOOG %>% forecast(h=1)
+EWMA.Vol.Accuracy.GOOG <- fabletools::accuracy(fore.EWMA.Vol.GOOG, GOOG.Train.Vol)
+xtable(EWMA.Vol.Accuracy.GOOG)
+
+```
+
+
+
+## Observed Volatility (VIX)
+
+```{r}
+## Calculate volatility for entire data
+r.VIX <- VIX$VIX.Adjusted %>% log %>% diff
+# rbar.VIX <- mean(r.VIX)
+# rho.VIX <- cor(r.VIX-rbar.VIX, sign(r.VIX-rbar.VIX))
+# vol.VIX <- abs(r.VIX-rbar.VIX)/rho.VIX
+
+
+# calculate sign correlation rho
+rho.cal<-function(X){
+  rho.hat<-cor(sign(X-mean(X)), X-mean(X))
+  return(rho.hat)
+}
+# Function for observed volatility
+observed.vol <- function(X){
+  X.cdf <- ecdf(X)
+  return(abs(X - mean(X))/(2*rho.cal(X)*sqrt(X.cdf(mean(X))*(1-X.cdf(mean(X))))))
+}
+rho.VIX <- rho.cal(r.VIX)
+vol.VIX <- sqrt(252)*observed.vol(as.numeric(r.VIX))
+
+
+vol.VIX.Train <- vol.VIX
+
+## New data frame for volatility (training data)
+VIX.Train.Vol <- tsibble(
+  Date = VIX_stock$Date[2:(length(vol.VIX.Train)+1)],
+  Trading_day = 1:length(vol.VIX.Train),
+  Volatility = vol.VIX.Train,
+  index = Trading_day
+)
+head(VIX.Train.Vol)
+
+
+# Time series cross-validation accuracy (Creating Training dataset)
+VIX.Train.Vol.tr <- VIX.Train.Vol |>
+  stretch_tsibble(.init = 150, .step = 1) |>
+  relocate(Date, .id)
+head(VIX.Train.Vol.tr)
+
+
+# TSCV accuracy
+
+## Prophet model
+library(fable.prophet)
+Prophet.Vol.VIX <- VIX.Train.Vol.tr %>%
+  model(prophet(Volatility))
+fore.Prophet.Vol.VIX <- Prophet.Vol.VIX %>% forecast(h=1)
+Prophet.Vol.Accuracy.VIX <- fabletools::accuracy(fore.Prophet.Vol.VIX, VIX.Train.Vol)
+xtable(Prophet.Vol.Accuracy.VIX)
+
+
+## nnetar model
+nnetar.Vol.VIX <- VIX.Train.Vol.tr %>%
+  model(NNETAR(Volatility))
+nnetar.Vol.VIX
+fore.nnetar.Vol.VIX <- nnetar.Vol.VIX %>% forecast(h=1)
+nnetar.Vol.Accuracy.VIX <- fabletools::accuracy(fore.nnetar.Vol.VIX, VIX.Train.Vol)
+xtable(nnetar.Vol.Accuracy.VIX)
+VIX.Train.Vol %>% model(NNETAR(Volatility))
+
+
+## EWMA model
+EWMA.Vol.VIX <- VIX.Train.Vol.tr %>%
+  model(ETS(Volatility))
+fore.EWMA.Vol.VIX <- EWMA.Vol.VIX %>% forecast(h=1)
+EWMA.Vol.Accuracy.VIX <- fabletools::accuracy(fore.EWMA.Vol.VIX, VIX.Train.Vol)
+xtable(EWMA.Vol.Accuracy.VIX)
+
+```
+
+
+
+## Observed Volatility (BTC)
+
+```{r}
+## Calculate volatility for entire data
+r.BTC <- BTC$`BTC-USD.Adjusted` %>% log %>% diff
+# rbar.BTC <- mean(r.BTC)
+# rho.BTC <- cor(r.BTC-rbar.BTC, sign(r.BTC-rbar.BTC))
+# vol.BTC <- abs(r.BTC-rbar.BTC)/rho.BTC
+
+
+# calculate sign correlation rho
+rho.cal<-function(X){
+  rho.hat<-cor(sign(X-mean(X)), X-mean(X))
+  return(rho.hat)
+}
+# Function for observed volatility
+observed.vol <- function(X){
+  X.cdf <- ecdf(X)
+  return(abs(X - mean(X))/(2*rho.cal(X)*sqrt(X.cdf(mean(X))*(1-X.cdf(mean(X))))))
+}
+rho.BTC <- rho.cal(r.BTC)
+vol.BTC <- sqrt(365)*observed.vol(as.numeric(r.BTC))
+
+
+vol.BTC.Train <- vol.BTC
+
+## New data frame for volatility (training data)
+BTC.Train.Vol <- tsibble(
+  Date = BTC_stock$Date[2:(length(vol.BTC.Train)+1)],
+  Trading_day = 1:length(vol.BTC.Train),
+  Volatility = vol.BTC.Train,
+  index = Trading_day
+)
+head(BTC.Train.Vol)
+
+
+# Time series cross-validation accuracy (Creating Training dataset)
+BTC.Train.Vol.tr <- BTC.Train.Vol |>
+  stretch_tsibble(.init = 150, .step = 1) |>
+  relocate(Date, .id)
+head(BTC.Train.Vol.tr)
+
+
+# TSCV accuracy
+
+## Prophet model
+library(fable.prophet)
+Prophet.Vol.BTC <- BTC.Train.Vol.tr %>%
+  model(prophet(Volatility))
+fore.Prophet.Vol.BTC <- Prophet.Vol.BTC %>% forecast(h=1)
+Prophet.Vol.Accuracy.BTC <- fabletools::accuracy(fore.Prophet.Vol.BTC, BTC.Train.Vol)
+xtable(Prophet.Vol.Accuracy.BTC)
+
+
+## nnetar model
+nnetar.Vol.BTC <- BTC.Train.Vol.tr %>%
+  model(NNETAR(Volatility))
+nnetar.Vol.BTC
+fore.nnetar.Vol.BTC <- nnetar.Vol.BTC %>% forecast(h=1)
+nnetar.Vol.Accuracy.BTC <- fabletools::accuracy(fore.nnetar.Vol.BTC, BTC.Train.Vol)
+xtable(nnetar.Vol.Accuracy.BTC)
+BTC.Train.Vol %>% model(NNETAR(Volatility))
+
+
+## EWMA model
+EWMA.Vol.BTC <- BTC.Train.Vol.tr %>%
+  model(ETS(Volatility))
+fore.EWMA.Vol.BTC <- EWMA.Vol.BTC %>% forecast(h=1)
+EWMA.Vol.Accuracy.BTC <- fabletools::accuracy(fore.EWMA.Vol.BTC, BTC.Train.Vol)
+xtable(EWMA.Vol.Accuracy.BTC)
+
+```
+
+
+
