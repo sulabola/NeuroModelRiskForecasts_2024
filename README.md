@@ -2,7 +2,7 @@
 
 Recently, there has been a growing interest in using neuro volatility models in fuzzy forecasting and fuzzy option pricing. Neuro volatility models are used to model and predict financial market volatility by extending the neural network autoregressive (NNAR) model for nonlinear nonstationary time series data. In financial risk forecasting, various risk forecasting models for volatility are used to obtain the volatility forecasts, and the model risk ratio based on all the models is calculated to assess the stability of the financial system. However, the recently proposed neuro volatility models (based on neural networks such as LSTM, NNAR, etc.) are not used in evaluating the model risk. In this study, novel `neuro model risk forecasts' are obtained by including recently proposed neuro volatility models, and the resiliency of the financial system is studied.
 
-The PDF copy of the paper can be downloaded from here: [Download Paper](https://ieeexplore.ieee.org/abstract/document/9918212) 
+The PDF copy of the paper can be downloaded from here: [Download Paper](https://ieeexplore.ieee.org/abstract/document/10633323) 
 
 A preprint version of the paper is available in the repository.
 
